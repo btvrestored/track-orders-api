@@ -317,7 +317,16 @@ async function reviewRequest(req: Request, site: Channel, id: string): Promise<R
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
   if (url.pathname === "/healthz" && req.method === "GET") {
-    return json(req, { ok: true, service: "track-orders-api", databaseConfigured: Boolean(DATABASE_URL) });
+    if (!pool) {
+      return json(req, { ok: false, service: "track-orders-api", databaseConfigured: false, databaseConnected: false }, 503);
+    }
+    try {
+      await pool.query("SELECT 1 AS ok");
+      return json(req, { ok: true, service: "track-orders-api", databaseConfigured: true, databaseConnected: true });
+    } catch (error) {
+      console.error("healthz database check:", error instanceof Error ? error.message : String(error));
+      return json(req, { ok: false, service: "track-orders-api", databaseConfigured: true, databaseConnected: false }, 503);
+    }
   }
   if (req.method === "OPTIONS") {
     return channelFromOrigin(req) ? new Response(null, { status: 204, headers: corsHeaders(req) }) : new Response(null, { status: 403 });
