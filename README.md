@@ -22,7 +22,7 @@ The server derives the source channel from the allowlisted Origin, not from an a
    - `BTV_SUPABASE_URL` and `BTV_SUPABASE_PUBLISHABLE_KEY`: existing BTV Auth project values.
    - `RTV_SUPABASE_URL` and `RTV_SUPABASE_PUBLISHABLE_KEY`: existing RTV Auth project values.
    - `DISCOGS_TOKEN`: optional server-side token.
-4. Deploy and open `/healthz`. It should report `ok: true` and `databaseConfigured: true`. This endpoint checks configuration, not DB reachability.
+4. Deploy and open `/healthz`. It should report `ok: true`, `databaseConfigured: true`, and `databaseConnected: true`. A 503 response means the DATABASE_URL is missing or the Neon connection failed.
 5. Copy the final Deno app URL. Put it in each site's `track-order-config.js` as `apiBaseUrl`, along with that site's existing Auth URL and publishable key. Never use a secret/service-role key in browser code.
 6. Add moderator grants in Neon after checking the actual UUIDs in each existing Supabase project's Authentication → Users.
 
