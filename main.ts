@@ -232,8 +232,21 @@ async function searchCatalog(req: Request, channel: Channel): Promise<Response> 
     return json(req, { ok: true, provider, results });
   } catch (error) {
     if (error instanceof RateLimitError) return json(req, { ok: false, error: "Слишком много поисков. Подожди 10 минут." }, 429);
-    console.error("catalog-search:", error instanceof Error ? error.message : String(error));
-    return json(req, { ok: false, error: "Каталог временно недоступен." }, 502);
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error("catalog-search:", detail);
+    if (detail.includes("TRACK_REQUEST_HASH_SALT")) {
+      return json(req, { ok: false, error: "На сервере не настроен TRACK_REQUEST_HASH_SALT. Добавь секрет в Deno Deploy и перезапусти приложение." }, 503);
+    }
+    if (/relation "track_(requests|request_rate_limits|catalog_cache|catalog_api_state|request_admins)" does not exist|undefined table/i.test(detail)) {
+      return json(req, { ok: false, error: "В Neon не хватает таблиц базы заявок. Выполни schema/001_track_orders.sql в правильном проекте Neon." }, 503);
+    }
+    if (/MusicBrainz HTTP 429/i.test(detail)) {
+      return json(req, { ok: false, error: "MusicBrainz временно ограничил частоту запросов. Подожди минуту и попробуй снова." }, 429);
+    }
+    if (/MusicBrainz HTTP/i.test(detail)) {
+      return json(req, { ok: false, error: "MusicBrainz ответил ошибкой. Попробуй позже; заявку всё равно можно отправить." }, 502);
+    }
+    return json(req, { ok: false, error: "Поиск каталога не завершился. Проверь готовность API на /healthz и попробуй снова." }, 502);
   }
 }
 async function submitRequest(req: Request, channel: Channel): Promise<Response> {
@@ -260,8 +273,15 @@ async function submitRequest(req: Request, channel: Channel): Promise<Response> 
     return json(req, { ok: true, request: result.rows[0] }, 201);
   } catch (error) {
     if (error instanceof RateLimitError) return json(req, { ok: false, error: "Слишком много заявок. Подожди 10 минут." }, 429);
-    console.error("submit-request:", error instanceof Error ? error.message : String(error));
-    return json(req, { ok: false, error: "Не удалось сохранить заявку." }, 500);
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error("submit-request:", detail);
+    if (detail.includes("TRACK_REQUEST_HASH_SALT")) {
+      return json(req, { ok: false, error: "На сервере не настроен TRACK_REQUEST_HASH_SALT. Добавь секрет в Deno Deploy и перезапусти приложение." }, 503);
+    }
+    if (/relation "track_(requests|request_rate_limits|catalog_cache|catalog_api_state|request_admins)" does not exist|undefined table/i.test(detail)) {
+      return json(req, { ok: false, error: "В Neon не хватает таблиц базы заявок. Выполни schema/001_track_orders.sql в правильном проекте Neon." }, 503);
+    }
+    return json(req, { ok: false, error: "Не удалось сохранить заявку. Проверь /healthz и логи Deno Deploy." }, 500);
   }
 }
 function requestedChannel(req: Request, site: Channel): Channel | "all" | null {
@@ -317,15 +337,48 @@ async function reviewRequest(req: Request, site: Channel, id: string): Promise<R
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
   if (url.pathname === "/healthz" && req.method === "GET") {
+    const saltConfigured = (Deno.env.get("TRACK_REQUEST_HASH_SALT") || "").length >= 24;
+    const btvAuthConfigured = Boolean(Deno.env.get("BTV_SUPABASE_URL") && Deno.env.get("BTV_SUPABASE_PUBLISHABLE_KEY"));
+    const rtvAuthConfigured = Boolean(Deno.env.get("RTV_SUPABASE_URL") && Deno.env.get("RTV_SUPABASE_PUBLISHABLE_KEY"));
     if (!pool) {
-      return json(req, { ok: false, service: "track-orders-api", databaseConfigured: false, databaseConnected: false }, 503);
+      return json(req, {
+        ok: false, service: "track-orders-api", databaseConfigured: false,
+        databaseConnected: false, schemaReady: false, rateLimitSaltConfigured: saltConfigured,
+        btvAuthConfigured, rtvAuthConfigured
+      }, 503);
     }
     try {
       await pool.query("SELECT 1 AS ok");
-      return json(req, { ok: true, service: "track-orders-api", databaseConfigured: true, databaseConnected: true });
+      const tableCheck = await pool.query(
+        "SELECT " +
+        "to_regclass('public.track_requests') IS NOT NULL AS track_requests, " +
+        "to_regclass('public.track_request_admins') IS NOT NULL AS track_request_admins, " +
+        "to_regclass('public.track_request_rate_limits') IS NOT NULL AS track_request_rate_limits, " +
+        "to_regclass('public.track_catalog_cache') IS NOT NULL AS track_catalog_cache, " +
+        "to_regclass('public.track_catalog_api_state') IS NOT NULL AS track_catalog_api_state"
+      );
+      const tables = tableCheck.rows[0] || {};
+      const missingTables = Object.entries(tables).filter(([, exists]) => exists !== true).map(([name]) => name);
+      const schemaReady = missingTables.length === 0;
+      const ready = schemaReady && saltConfigured && btvAuthConfigured && rtvAuthConfigured;
+      return json(req, {
+        ok: ready,
+        service: "track-orders-api",
+        databaseConfigured: true,
+        databaseConnected: true,
+        schemaReady,
+        missingTables,
+        rateLimitSaltConfigured: saltConfigured,
+        btvAuthConfigured,
+        rtvAuthConfigured
+      }, ready ? 200 : 503);
     } catch (error) {
       console.error("healthz database check:", error instanceof Error ? error.message : String(error));
-      return json(req, { ok: false, service: "track-orders-api", databaseConfigured: true, databaseConnected: false }, 503);
+      return json(req, {
+        ok: false, service: "track-orders-api", databaseConfigured: true,
+        databaseConnected: false, schemaReady: false, rateLimitSaltConfigured: saltConfigured,
+        btvAuthConfigured, rtvAuthConfigured
+      }, 503);
     }
   }
   if (req.method === "OPTIONS") {
