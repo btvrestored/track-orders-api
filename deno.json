@@ -1,0 +1,13 @@
+{
+  "imports": {
+    "pg": "npm:pg@8.16.3"
+  },
+  "tasks": {
+    "start": "deno run --allow-net --allow-env main.ts",
+    "check": "deno check main.ts"
+  },
+  "compilerOptions": {
+    "strict": true,
+    "noImplicitOverride": true
+  }
+}
