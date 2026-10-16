@@ -1,0 +1,26 @@
+name: Check API
+
+on:
+  push:
+    branches:
+      - main
+      - feat/neon-api-2026-10-16
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  deno-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Type-check API
+        run: deno check main.ts
