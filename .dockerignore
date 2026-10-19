@@ -1,0 +1,9 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+README.md
+render.yaml
+.DS_Store
+Thumbs.db
