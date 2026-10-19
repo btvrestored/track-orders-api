@@ -119,19 +119,31 @@ jobs:
                   "Accept": "application/json",
               },
           )
-          try:
-              with urllib.request.urlopen(req, timeout=25) as response:
-                  code = response.status
-                  data = json.loads(response.read().decode("utf-8", "replace"))
-          except urllib.error.HTTPError as exc:
-              code = exc.code
+          import time
+
+          data = {}
+          code = 0
+          for attempt in range(6):
               try:
-                  data = json.loads(exc.read().decode("utf-8", "replace"))
-              except Exception:
-                  data = {}
-          except Exception as exc:
-              print(f"{os.environ['CHANNEL']}: request failed: {exc}")
-              sys.exit(1)
+                  with urllib.request.urlopen(req, timeout=25) as response:
+                      code = response.status
+                      data = json.loads(response.read().decode("utf-8", "replace"))
+              except urllib.error.HTTPError as exc:
+                  code = exc.code
+                  try:
+                      data = json.loads(exc.read().decode("utf-8", "replace"))
+                  except Exception:
+                      data = {}
+              except Exception as exc:
+                  print(f"{os.environ['CHANNEL']}: request failed: {exc}")
+                  sys.exit(1)
+
+              busy = code == 429 and "Каталог занят" in str(data.get("error", ""))
+              if busy and attempt < 5:
+                  print("Shared MusicBrainz throttle is busy; retrying in 1.4 seconds.")
+                  time.sleep(1.4)
+                  continue
+              break
 
           results = data.get("results")
           print(f"{os.environ['CHANNEL']} catalog HTTP: {code}")
