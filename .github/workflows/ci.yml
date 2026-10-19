@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - feat/neon-api-2026-10-16
+      - feat/render-hosting-2026-10-19
   pull_request:
     branches:
       - main
