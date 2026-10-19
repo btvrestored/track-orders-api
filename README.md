@@ -1,34 +1,61 @@
-# Track Orders API (Neon + Deno Deploy)
+# Track Orders API (Neon + Render)
 
-Separate backend for the BRIDGE TV and RUSONG TV music request forms. The database connection is server-only. Never commit production secrets.
+Separate API for BTV and RTV music request forms, backed by the existing Neon PostgreSQL database. The Render deployment uses the Dockerfile in this repository. Never commit production secrets.
 
 ## API routes
 
-- `GET /healthz` — basic health/configuration response.
-- `POST /api/requests` — validated request; artist and direct YouTube/VK video link are required; new requests are always pending.
-- `POST /api/catalog/search` — MusicBrainz by default; Discogs only if `DISCOGS_TOKEN` is configured.
-- `GET /api/admin/requests?channel=btv|rtv|all&status=pending|approved|rejected|all` — validates a Supabase Auth access token and active channel grant.
-- `POST /api/admin/requests/:uuid/review?channel=btv|rtv` — approve/reject pending requests.
+- `GET /healthz` — checks database connectivity, required tables and environment configuration.
+- `POST /api/requests` — validates and stores public requests as `pending`.
+- `POST /api/catalog/search` — MusicBrainz by default; Discogs if `DISCOGS_TOKEN` is configured.
+- `GET /api/admin/requests?channel=btv|rtv|all&status=pending|approved|rejected|all` — validates an existing Supabase Auth token and channel grant.
+- `POST /api/admin/requests/:uuid/review?channel=btv|rtv` — approves or rejects a pending request.
 
-The server derives the source channel from the allowlisted Origin, not from an anonymous request's claimed value. Admin routes validate access tokens against the existing channel-specific Supabase Auth project and check `track_request_admins` in Neon.
+The public API derives the channel from the allowlisted website Origin. Moderator access is checked server-side against the matching existing BTV or RTV Supabase Auth project and the `track_request_admins` table in Neon.
 
-## Deploy on new Deno Deploy
+## Deploy to Render
 
-1. Open https://console.deno.com/ and create a dynamic application from `btvrestored/track-orders-api`.
-2. Select `main.ts` as the entrypoint.
-3. Add environment variables in app settings:
-   - `DATABASE_URL`: Neon pooled PostgreSQL URL; server-only.
-   - `TRACK_REQUEST_HASH_SALT`: random value at least 24 characters.
-   - `BTV_SUPABASE_URL` and `BTV_SUPABASE_PUBLISHABLE_KEY`: existing BTV Auth project values.
-   - `RTV_SUPABASE_URL` and `RTV_SUPABASE_PUBLISHABLE_KEY`: existing RTV Auth project values.
-   - `DISCOGS_TOKEN`: optional server-side token.
-4. Deploy and open `/healthz`. It should report `ok: true`, `databaseConfigured: true`, and `databaseConnected: true`. A 503 response means the DATABASE_URL is missing or the Neon connection failed.
-5. Copy the final Deno app URL. Put it in each site's `track-order-config.js` as `apiBaseUrl`, along with that site's existing Auth URL and publishable key. Never use a secret/service-role key in browser code.
-6. Add moderator grants in Neon after checking the actual UUIDs in each existing Supabase project's Authentication → Users.
+### Recommended: use the Blueprint
 
-## Neon tables
+1. Open https://dashboard.render.com/ and connect the GitHub account if needed.
+2. Choose **New → Blueprint**.
+3. Select `btvrestored/track-orders-api` and branch `feat/render-hosting-2026-10-19`.
+4. Render should detect `render.yaml`. Review the service and keep the compute plan at **Free** for the initial test.
+5. Fill the environment variables in Render's setup flow or open the service's **Environment** page after creation.
+6. Deploy and wait for the build to finish.
 
-`schema/001_track_orders.sql` creates:
+If Blueprint setup is unavailable, use **New → Web Service**, select the same repository and branch, choose **Docker** as the runtime, and use `./Dockerfile` as the Dockerfile path. Set health check path to `/healthz`.
+
+### Required environment variables
+
+Use the same actual values as the currently working Deno Deploy configuration:
+
+- `DATABASE_URL` — Neon pooled PostgreSQL connection string. Server-only.
+- `TRACK_REQUEST_HASH_SALT` — your existing random secret, at least 24 characters.
+- `BTV_SUPABASE_URL` — existing BTV Supabase project URL.
+- `BTV_SUPABASE_PUBLISHABLE_KEY` — existing public/publishable key for BTV Auth.
+- `RTV_SUPABASE_URL` — existing RTV Supabase project URL.
+- `RTV_SUPABASE_PUBLISHABLE_KEY` — existing public/publishable key for RTV Auth.
+- `DISCOGS_TOKEN` — optional; leave empty or unset unless Discogs search is enabled.
+
+Do not store `DATABASE_URL`, the hash salt, or a Discogs token in GitHub, public JavaScript, a Docker image, or chat. `.env.example` contains only placeholders.
+
+### Verify before switching the websites
+
+1. Open `https://YOUR-RENDER-SERVICE.onrender.com/healthz`. It should return HTTP 200 with `ok: true`, `databaseConnected: true`, `schemaReady: true`, `missingTables: []`, `rateLimitSaltConfigured: true`, `btvAuthConfigured: true`, and `rtvAuthConfigured: true`.
+2. Search MusicBrainz from the BTV test form and check that results render.
+3. Submit exactly one test request from a website with the correct Origin. Confirm it exists in Neon with status `pending`.
+4. Sign in to the relevant existing Auth account, verify the correct admin UID grant in Neon, and test approving/rejecting the request.
+5. Only after those tests pass, change `apiBaseUrl` in the BTV and RTV website configs to the Render URL and deploy those site branches.
+
+Keep the old Deno URL saved until Render passes all tests. Do not remove or migrate Neon data as part of this hosting move.
+
+## Free-plan caveats
+
+Render Free web services spin down after 15 minutes without inbound traffic and may take about a minute to start on the next request. The free tier also has workspace-level limits (including 750 instance hours per calendar month and outbound bandwidth/build-pipeline allowances). It is suitable for testing/hobby use, not a guarantee of uninterrupted production operation. Check current usage in Render Dashboard.
+
+## Database and permissions
+
+The Neon schema must already include these tables:
 
 - `track_requests`
 - `track_request_admins`
@@ -36,35 +63,12 @@ The server derives the source channel from the allowlisted Origin, not from an a
 - `track_catalog_cache`
 - `track_catalog_api_state`
 
-This migration matches the tables created during the initial Neon setup. Review any existing data before applying it to a different project.
-
-## Register moderators
-
-Replace the placeholder UUIDs with actual Auth UIDs from Authentication → Users in the corresponding Supabase projects:
-
-```sql
-INSERT INTO public.track_request_admins (auth_project, auth_user_id, channel, active)
-VALUES ('btv', 'BTV_AUTH_USER_UUID', 'btv', true)
-ON CONFLICT (auth_project, auth_user_id, channel)
-DO UPDATE SET active = EXCLUDED.active;
-
-INSERT INTO public.track_request_admins (auth_project, auth_user_id, channel, active)
-VALUES ('rtv', 'RTV_AUTH_USER_UUID', 'rtv', true)
-ON CONFLICT (auth_project, auth_user_id, channel)
-DO UPDATE SET active = EXCLUDED.active;
-
--- Optional: this BTV Auth user may moderate both channels.
--- INSERT INTO public.track_request_admins (auth_project, auth_user_id, channel, active)
--- VALUES ('btv', 'BTV_AUTH_USER_UUID', 'all', true);
-```
-
-The UUIDs above are placeholders. The same person may need one grant for the BTV Auth identity and another for the RTV Auth identity if both admin sites should work.
+Do not rerun schema creation against the live database without first checking whether the tables already exist. This API connects using `DATABASE_URL`; browsers never connect directly to Neon.
 
 ## Security
 
-- `DATABASE_URL`, `TRACK_REQUEST_HASH_SALT`, and Discogs token are server-only.
-- Only publishable Supabase keys are used to validate existing Auth tokens; no service-role key belongs in this repo or the frontend.
-- The server validates request data, accepts only direct HTTPS YouTube/VK video links, and never auto-approves catalog matches.
-- Limits are 5 submissions and 20 catalog searches per hashed identity/channel/10-minute bucket. Raw requester IPs are not stored. Proxy-header IP limits are best effort, not proof of identity.
-- MusicBrainz calls include a User-Agent, a database-backed global throttle of at least 1.1 seconds, and a 12-hour cache. Respect MusicBrainz rate limits.
-- Allowed production origins are `https://btvrestored.ru`, `https://www.btvrestored.ru`, `https://rtvrestored.ru`, and `https://www.rtvrestored.ru`. Update the allowlist only when production origins change.
+- Requests require an artist and a direct HTTPS YouTube/VK video URL. New requests always start as `pending`.
+- Rate limiting is 5 submissions and 20 catalogue searches per hashed identity/channel/10-minute bucket. Raw IP addresses are not persisted.
+- MusicBrainz calls include a User-Agent, a shared database-backed throttle of at least 1.1 seconds, and a 12-hour cache. Respect its rate limit.
+- Catalog matches are metadata evidence only and never auto-approve a music request.
+- Current allowed production Origins: `https://btvrestored.ru`, `https://www.btvrestored.ru`, `https://rtvrestored.ru`, and `https://www.rtvrestored.ru`.
