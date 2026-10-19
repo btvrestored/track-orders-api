@@ -334,7 +334,7 @@ async function reviewRequest(req: Request, site: Channel, id: string): Promise<R
   }
 }
 
-Deno.serve(async (req: Request) => {
+Deno.serve({ port: Number(Deno.env.get("PORT") || "10000"), hostname: "0.0.0.0" }, async (req: Request) => {
   const url = new URL(req.url);
   if (url.pathname === "/healthz" && req.method === "GET") {
     const saltConfigured = (Deno.env.get("TRACK_REQUEST_HASH_SALT") || "").length >= 24;
