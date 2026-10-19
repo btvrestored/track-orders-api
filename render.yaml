@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: track-orders-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeploy: false
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: TRACK_REQUEST_HASH_SALT
+        sync: false
+      - key: BTV_SUPABASE_URL
+        sync: false
+      - key: BTV_SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: RTV_SUPABASE_URL
+        sync: false
+      - key: RTV_SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: DISCOGS_TOKEN
+        sync: false
