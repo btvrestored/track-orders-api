@@ -153,3 +153,85 @@ jobs:
               sys.exit(1)
           print(f"{os.environ['CHANNEL']}: MUSICBRAINZ PASS")
           PY
+
+  route-guards:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - channel: btv
+            url: https://cmjtxlevjnwugeyttexa.supabase.co/functions/v1/track-orders-api
+            apikey: sb_publishable_JPGJOa51xwNAm7Dk55F3Iw_IcNhhdxw
+            origin: https://btvrestored.ru
+          - channel: rtv
+            url: https://fmwagmqysszshcvaddwo.supabase.co/functions/v1/track-orders-api
+            apikey: sb_publishable_ft2uIm5ltqrbPGD2ROCzdw_crjiE9Ke
+            origin: https://rtvrestored.ru
+    steps:
+      - name: Check validation and unauthenticated admin denial (no database write)
+        env:
+          API_URL: ${{ matrix.url }}
+          API_KEY: ${{ matrix.apikey }}
+          ORIGIN: ${{ matrix.origin }}
+          CHANNEL: ${{ matrix.channel }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          base = os.environ["API_URL"].rstrip("/")
+          common = {
+              "apikey": os.environ["API_KEY"],
+              "Origin": os.environ["ORIGIN"],
+              "Accept": "application/json",
+          }
+
+          invalid_body = json.dumps({"artist": "", "clipUrl": ""}).encode()
+          submit_req = urllib.request.Request(
+              base + "/api/requests",
+              data=invalid_body,
+              method="POST",
+              headers={**common, "Content-Type": "application/json"},
+          )
+          try:
+              with urllib.request.urlopen(submit_req, timeout=20) as response:
+                  submit_code = response.status
+                  submit_data = json.loads(response.read().decode("utf-8", "replace"))
+          except urllib.error.HTTPError as exc:
+              submit_code = exc.code
+              try:
+                  submit_data = json.loads(exc.read().decode("utf-8", "replace"))
+              except Exception:
+                  submit_data = {}
+
+          print(f"{os.environ['CHANNEL']} invalid-submit validation: HTTP {submit_code}")
+          if submit_code != 400 or submit_data.get("ok") is not False:
+              print("Unexpected validation response:", json.dumps(submit_data, ensure_ascii=False))
+              sys.exit(1)
+
+          admin_req = urllib.request.Request(
+              base + "/api/admin/requests?channel=" + os.environ["CHANNEL"] + "&status=all",
+              method="GET",
+              headers=common,
+          )
+          try:
+              with urllib.request.urlopen(admin_req, timeout=20) as response:
+                  admin_code = response.status
+                  admin_data = json.loads(response.read().decode("utf-8", "replace"))
+          except urllib.error.HTTPError as exc:
+              admin_code = exc.code
+              try:
+                  admin_data = json.loads(exc.read().decode("utf-8", "replace"))
+              except Exception:
+                  admin_data = {}
+
+          print(f"{os.environ['CHANNEL']} unauthenticated moderation: HTTP {admin_code}")
+          if admin_code != 403 or admin_data.get("ok") is not False:
+              print("Expected unauthenticated access to be denied:", json.dumps(admin_data, ensure_ascii=False))
+              sys.exit(1)
+          print(f"{os.environ['CHANNEL']}: ROUTE GUARDS PASS")
+          PY
